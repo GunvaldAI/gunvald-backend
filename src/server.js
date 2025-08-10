@@ -11,6 +11,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import pkg from 'pg';
 import { randomUUID } from 'crypto';
+import fs from 'fs';
 
 // Read environment variables for database connection and JWT secret. In a
 // Railway deployment you should configure DATABASE_URL and JWT_SECRET.
@@ -28,6 +29,25 @@ const logger = {
   info: (...args) => console.log(...args),
   error: (...args) => console.error(...args),
 };
+
+// Attempt to apply the database schema on startup. This function reads the
+// schema.sql file from the project root and executes it against the
+// PostgreSQL database. It runs once when the server is first imported. If
+// the tables already exist, the CREATE TABLE ... IF NOT EXISTS statements
+// will simply do nothing. Any errors are logged but do not prevent the
+// server from starting.
+(async () => {
+  try {
+    // Resolve the path to schema.sql relative to this file. The schema
+    // resides one directory up from src (../schema.sql) in the repository.
+    const schemaPath = new URL('../schema.sql', import.meta.url);
+    const schema = fs.readFileSync(schemaPath, 'utf8');
+    await pool.query(schema);
+    logger.info('Database schema applied successfully');
+  } catch (err) {
+    logger.error('Error applying database schema:', err);
+  }
+})();
 
 
 const app = express();
