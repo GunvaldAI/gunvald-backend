@@ -336,7 +336,24 @@ app.get('/health', (req, res) => {
 });
 
 applySchema().then(() => {
-  const port = process.env.PORT || 8880;
+  // Start a simple scheduler to publish scheduled posts automatically.
+  async function publishScheduledPosts() {
+    try {
+      const result = await pool.query(
+        `UPDATE posts SET status='published'
+         WHERE status='scheduled' AND scheduled_at <= NOW() RETURNING id`
+      );
+      if (result.rowCount > 0) {
+        logger.info(`Scheduler published ${result.rowCount} posts`);
+      }
+    } catch (err) {
+      logger.error('Scheduler error publishing posts:', err);
+    }
+  }
+  // Run scheduler every minute
+  setInterval(publishScheduledPosts, 60 * 1000);
+  // Always listen on port 8880. Railway meta-edge proxies use port 8880 for HTTP services.
+  const port = 8880;
   app.listen(port, () => {
     logger.info(`Server listening on port ${port}`);
   });
