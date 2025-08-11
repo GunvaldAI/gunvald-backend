@@ -1,0 +1,79 @@
+// Prisma schema for Gunvald backend
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id             Int       @id @default(autoincrement())
+  email          String    @unique
+  passwordHash   String    @map("password_hash")
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  organizationId Int?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  posts          Post[]
+}
+
+model Organization {
+  id        Int       @id @default(autoincrement())
+  name      String
+  createdAt DateTime  @default(now()) @map("created_at")
+  users     User[]
+  brandProfile BrandProfile?
+  channels  Channel[]
+  posts     Post[]
+  assets    Asset[]
+}
+
+model BrandProfile {
+  id            Int       @id @default(autoincrement())
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId Int       @unique
+  companyName    String?   @map("company_name")
+  industry       String?
+  targetAudience String?   @map("target_audience")
+  tone           String?
+  brandColors    String?   @map("brand_colors")
+  logoUrl        String?   @map("logo_url")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+}
+
+model Channel {
+  id            Int        @id @default(autoincrement())
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId Int
+  name          String
+  type          String
+  accessToken   String?    @map("access_token")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @default(now()) @updatedAt @map("updated_at")
+  posts         Post[]
+}
+
+model Post {
+  id            Int        @id @default(autoincrement())
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId Int
+  channel        Channel?   @relation(fields: [channelId], references: [id])
+  channelId     Int?
+  content       String?
+  status        String     @default("draft")
+  scheduledAt   DateTime?  @map("scheduled_at")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @default(now()) @updatedAt @map("updated_at")
+}
+
+model Asset {
+  id            Int        @id @default(autoincrement())
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId Int
+  url           String
+  type          String
+  createdAt     DateTime   @default(now()) @map("created_at")
+}
