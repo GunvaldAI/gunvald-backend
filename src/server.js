@@ -339,6 +339,58 @@ app.get('/api/usage', authenticate, async (req, res) => {
   }
 });
 
+// --- ANALYTICS ROUTES ---
+// Returns weekly post counts for the authenticated organization. Each record contains
+// the week start date (ISO string) and the number of posts scheduled or published in that week.
+app.get('/api/stats/posts', authenticate, async (req, res) => {
+  try {
+    // Determine the organization for the current user
+    const userRes = await pool.query('SELECT organization_id FROM users WHERE id=$1', [req.userId]);
+    const orgId = userRes.rows[0]?.organization_id;
+    if (!orgId) return res.status(400).json({ error: 'Organization not found' });
+    // Aggregate posts by ISO week (starting Monday)
+    const statsRes = await pool.query(
+      `SELECT to_char(date_trunc('week', scheduled_at), 'YYYY-MM-DD') AS week_start,
+              COUNT(*) AS post_count
+       FROM posts
+       WHERE organization_id=$1
+       GROUP BY week_start
+       ORDER BY week_start DESC
+       LIMIT 6`,
+      [orgId]
+    );
+    return res.json(statsRes.rows);
+  } catch (err) {
+    logger.error('Error fetching post stats:', err);
+    return res.status(500).json({ error: 'Failed to fetch post statistics' });
+  }
+});
+
+// Returns counts of posts by status (draft, scheduled, published) for the authenticated organization.
+app.get('/api/stats/status', authenticate, async (req, res) => {
+  try {
+    const userRes = await pool.query('SELECT organization_id FROM users WHERE id=$1', [req.userId]);
+    const orgId = userRes.rows[0]?.organization_id;
+    if (!orgId) return res.status(400).json({ error: 'Organization not found' });
+    const resCounts = await pool.query(
+      `SELECT status, COUNT(*) AS count
+       FROM posts
+       WHERE organization_id=$1
+       GROUP BY status`,
+      [orgId]
+    );
+    // Convert array of rows to an object keyed by status
+    const counts = resCounts.rows.reduce((acc, row) => {
+      acc[row.status] = Number(row.count);
+      return acc;
+    }, {});
+    return res.json(counts);
+  } catch (err) {
+    logger.error('Error fetching status stats:', err);
+    return res.status(500).json({ error: 'Failed to fetch status statistics' });
+  }
+});
+
 app.post('/api/schedule', authenticate, async (req, res) => {
   const { postId, publishAt } = req.body;
   if (!postId || !publishAt) {
