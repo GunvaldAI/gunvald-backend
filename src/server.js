@@ -12,6 +12,9 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const { randomUUID } = require('crypto');
+
+// Import Clerk middleware for authentication via Clerk sessions
+const { ClerkExpressWithAuth } = require('@clerk/clerk-sdk-node');
 const fs = require('fs');
 const path = require('path');
 
@@ -48,6 +51,10 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
+// Apply Clerk middleware to attach `auth` information to each request.
+// This will populate `req.auth.userId` when a valid Clerk session token is provided.
+app.use(ClerkExpressWithAuth());
+
 // Middleware for unique request IDs and logging.
 app.use((req, res, next) => {
   const reqId = randomUUID();
@@ -70,6 +77,12 @@ const upload = multer({ dest: 'uploads/' });
 
 // Auth middleware
 function authenticate(req, res, next) {
+  // If Clerk has authenticated the request, use the Clerk userId
+  if (req.auth && req.auth.userId) {
+    req.userId = req.auth.userId;
+    return next();
+  }
+  // Fallback to JWT authentication for legacy clients
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: 'Missing token' });
   try {
