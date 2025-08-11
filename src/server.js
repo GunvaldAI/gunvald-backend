@@ -15,6 +15,9 @@ const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+// Import AI helper for content generation
+const { generatePlan } = require('./src/ai');
+
 // Read environment variables for database connection and JWT secret.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -231,32 +234,55 @@ app.get('/api/brand-profile', authenticate, async (req, res) => {
 });
 
 // --- AI GENERATION & POSTS ---
+// Array of words that should flag generated content for moderation.
 const bannedWords = ['kielletty', 'väkivalta', 'rasismi'];
 
+/**
+ * POST /api/generate
+ * Generates a series of draft posts for the authenticated user's organization.
+ * Optionally accepts `count` in the request body to control the number of posts (1–7).
+ * Uses the brand profile to craft more relevant content via the generatePlan helper.
+ */
 app.post('/api/generate', authenticate, async (req, res) => {
   const { count } = req.body;
+  // Default to 5 posts; clamp the count between 1 and 7 to avoid excessive generation.
   const postCount = count && Number(count) > 0 ? Math.min(Number(count), 7) : 5;
   try {
+    // Determine the organization for the current user.
     const userRes = await pool.query('SELECT organization_id FROM users WHERE id=$1', [req.userId]);
     const orgId = userRes.rows[0]?.organization_id;
-    if (!orgId) return res.status(400).json({ error: 'Organization not found' });
+    if (!orgId) {
+      return res.status(400).json({ error: 'Organization not found' });
+    }
+
+    // Fetch the brand profile associated with this organization to inform content generation.
+    const brandRes = await pool.query(
+      'SELECT company_name, industry, target_audience, tone, brand_colors FROM brand_profiles WHERE organization_id=$1',
+      [orgId]
+    );
+    const brand = brandRes.rows[0] || {};
+
+    // Use the AI helper to generate raw post suggestions (text + hashtags).
+    const generated = generatePlan(brand, postCount);
     const posts = [];
-    for (let i = 0; i < postCount; i++) {
-      const text = `Tämä on ehdotettu postaus numero ${i + 1}`;
-      const hashtags = ['#esimerkki', '#hashtag'];
+
+    // Construct final post objects with scheduling and moderation flags.
+    for (let i = 0; i < generated.length; i++) {
+      const { text, hashtags } = generated[i];
       const flagged = bannedWords.some((w) => text.toLowerCase().includes(w));
       const date = new Date();
       date.setDate(date.getDate() + i);
-      const post = {
+      posts.push({
         organization_id: orgId,
         text,
         hashtags,
         scheduled_at: date,
         flagged,
         status: 'draft',
-      };
-      posts.push(post);
+      });
     }
+
+    // Persist posts to the database.
     for (const post of posts) {
       await pool.query(
         `INSERT INTO posts (organization_id, text, hashtags, scheduled_at, flagged, status)
