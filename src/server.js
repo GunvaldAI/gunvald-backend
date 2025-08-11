@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Import AI helper for content generation
-const { generatePlan } = require('./src/ai');
+const { generatePlan } = require('./ai');
 
 // Read environment variables for database connection and JWT secret.
 const pool = new Pool({
