@@ -49,6 +49,8 @@ app.use(bodyParser.json());
 app.use((req, res, next) => {
   const reqId = randomUUID();
   req.reqId = reqId;
+  // Include request ID in response headers for tracing
+  res.setHeader('X-Request-ID', reqId);
   const start = Date.now();
   logger.info(`[${reqId}] -> ${req.method} ${req.originalUrl}`);
   res.on('finish', () => {
