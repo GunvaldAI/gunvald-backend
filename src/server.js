@@ -13,6 +13,10 @@ const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const { randomUUID } = require('crypto');
 
+// Import Sentry for observability and tracing
+const Sentry = require('@sentry/node');
+const Tracing = require('@sentry/tracing');
+
 // Import Clerk middleware for authentication via Clerk sessions
 const { ClerkExpressWithAuth } = require('@clerk/clerk-sdk-node');
 const fs = require('fs');
@@ -27,6 +31,22 @@ const pool = new Pool({
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
+
+// Initialize Sentry for error and performance monitoring. Use environment variables
+// for configuration. The DSN should be set in Railway or environment to enable
+// event delivery. The Http integration captures outbound requests and tracing
+// information. We do not specify an Express integration here to avoid
+// referencing the app before it is created.
+Sentry.init({
+  dsn: process.env.SENTRY_DSN || '',
+  environment: process.env.NODE_ENV || 'development',
+  integrations: [
+    new Sentry.Integrations.Http({ tracing: true }),
+  ],
+  // Adjust this value in production. A value of 1.0 will capture
+  // all transactions; decrease to reduce data volume.
+  tracesSampleRate: 1.0,
+});
 
 // Simple logger for tracing requests.
 const logger = {
@@ -50,6 +70,12 @@ async function applySchema() {
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
+
+// Register Sentry request and tracing handlers before other middlewares.
+// These handlers create a Sentry transaction for each incoming request
+// and attach helpful context for debugging.
+app.use(Sentry.Handlers.requestHandler());
+app.use(Sentry.Handlers.tracingHandler());
 
 // Apply Clerk middleware to attach `auth` information to each request.
 // This will populate `req.auth.userId` when a valid Clerk session token is provided.
@@ -427,6 +453,11 @@ app.post('/api/publish-scheduled', authenticate, async (req, res) => {
 app.get('/health', (req, res) => {
   return res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Capture any errors that have not been handled by previous middleware.
+// This should be registered after all route definitions so that Sentry
+// receives information about thrown exceptions.
+app.use(Sentry.Handlers.errorHandler());
 
 applySchema().then(() => {
   // Start a simple scheduler to publish scheduled posts automatically.
