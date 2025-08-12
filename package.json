@@ -17,6 +17,8 @@
     "bcrypt": "^5.1.1",
     "jsonwebtoken": "^9.0.0",
     "pg": "^8.11.1",
-    "@clerk/clerk-sdk-node": "^4.0.0"
+    "@clerk/clerk-sdk-node": "^4.0.0",
+    "@sentry/node": "^7.51.1",
+    "@sentry/tracing": "^7.51.1"
   }
 }
