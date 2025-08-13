@@ -19,6 +19,7 @@ const Tracing = require('@sentry/tracing');
 
 // Import Clerk middleware for authentication via Clerk sessions
 const { ClerkExpressWithAuth } = require('@clerk/clerk-sdk-node');
+const { syncClerkAllowedOrigins } = require('./utils/clerkAllowedOrigins.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -68,6 +69,8 @@ async function applySchema() {
 }
 
 const app = express();
+// Run Clerk allowed origins synchronization on startup
+syncClerkAllowedOrigins();
 app.use(cors());
 app.use(bodyParser.json());
 
