@@ -1,6 +1,6 @@
 export async function syncClerkAllowedOrigins() {
   try {
-   const secret = process.env.CLERK_SECRET_KEY;
+    const secret = process.env.CLERK_SECRET_KEY;
     const apiUrl = process.env.CLERK_API_URL || 'https://api.clerk.com';
     const raw = (process.env.CLERK_ALLOWED_ORIGINS || '').trim();
 
@@ -18,13 +18,13 @@ export async function syncClerkAllowedOrigins() {
       .map(s => s.trim())
       .filter(Boolean);
 
-   const res = await fetch(`${apiUrl}/v1/instance`, {
+    const res = await fetch(`${apiUrl}/v1/instance`, {
       method: 'PATCH',
       headers: {
-        'Authorization': `Bearer ${secret}`,
-        'Content-Type': 'application/json'
+        Authorization: `Bearer ${secret}`,
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ allowed_origins: allowed })
+      body: JSON.stringify({ allowed_origins: allowed }),
     });
 
     if (!res.ok) {
