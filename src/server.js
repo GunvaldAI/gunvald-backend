@@ -1,8 +1,9 @@
 // Gunvald profile backend (CommonJS version) with default port 8880
 // This Express server exposes API endpoints for user registration,
-// authentication, profile management, brand profiles, content generation and scheduling.
-// It uses PostgreSQL for data storage and JWT for authentication. It also applies
-// the database schema on startup using a local schema.sql file.
+// authentication, profile management, brand profiles, content generation
+// and scheduling. It uses PostgreSQL for data storage and JWT for
+// authentication. It also applies the database schema on startup using
+// a local schema.sql file.
 
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -26,6 +27,12 @@ const path = require('path');
 // Import AI helper for content generation
 const { generatePlan } = require('./ai');
 
+// Import Profiles router for Clerk-based profile CRUD operations.  This
+// router handles profiles keyed by Clerk ID and exposes GET, POST and
+// PUT endpoints under /api/profiles.  See src/profiles.js for the
+// implementation details.
+const createProfilesRouter = require('./profiles');
+
 // Read environment variables for database connection and JWT secret.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -33,19 +40,18 @@ const pool = new Pool({
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
-// Initialize Sentry for error and performance monitoring. Use environment variables
-// for configuration. The DSN should be set in Railway or environment to enable
-// event delivery. The Http integration captures outbound requests and tracing
-// information. We do not specify an Express integration here to avoid
-// referencing the app before it is created.
+// Initialize Sentry for error and performance monitoring. Use environment
+// variables for configuration. The DSN should be set in Railway or the
+// environment to enable event delivery. The Http integration captures
+// outbound requests and tracing information. We do not specify an
+// Express integration here to avoid referencing the app before it is
+// created.
 Sentry.init({
   dsn: process.env.SENTRY_DSN || '',
   environment: process.env.NODE_ENV || 'development',
-  integrations: [
-    new Sentry.Integrations.Http({ tracing: true }),
-  ],
-  // Adjust this value in production. A value of 1.0 will capture
-  // all transactions; decrease to reduce data volume.
+  integrations: [new Sentry.Integrations.Http({ tracing: true })],
+  // Adjust this value in production. A value of 1.0 will capture all
+  // transactions; decrease to reduce data volume.
   tracesSampleRate: 1.0,
 });
 
@@ -81,7 +87,8 @@ app.use(Sentry.Handlers.requestHandler());
 app.use(Sentry.Handlers.tracingHandler());
 
 // Apply Clerk middleware to attach `auth` information to each request.
-// This will populate `req.auth.userId` when a valid Clerk session token is provided.
+// This will populate `req.auth.userId` when a valid Clerk session token is
+// provided.
 app.use(ClerkExpressWithAuth());
 
 // Middleware for unique request IDs and logging.
@@ -95,7 +102,7 @@ app.use((req, res, next) => {
   res.on('finish', () => {
     const duration = Date.now() - start;
     logger.info(
-      `[${reqId}] <- ${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`
+      `[${reqId}] <- ${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`,
     );
   });
   next();
@@ -104,7 +111,8 @@ app.use((req, res, next) => {
 // Multer setup for file uploads
 const upload = multer({ dest: 'uploads/' });
 
-// Auth middleware
+// Auth middleware.  If Clerk has authenticated the request then use
+// the Clerk userId.  Otherwise fall back to verifying our own JWT.
 function authenticate(req, res, next) {
   // If Clerk has authenticated the request, use the Clerk userId
   if (req.auth && req.auth.userId) {
@@ -123,17 +131,23 @@ function authenticate(req, res, next) {
   }
 }
 
+// Instantiate and mount the profiles router for Clerk-based profile CRUD.
+// Mounting under "/api" means that the routes defined in profiles.js
+// (e.g. GET /profiles/:clerkId) will be served at /api/profiles/:clerkId.
+const profilesRouter = createProfilesRouter(pool);
+app.use('/api', authenticate, profilesRouter);
+
 // Ensure user belongs to an organization; create if missing
 async function ensureOrganization(userId, name) {
   const orgRes = await pool.query(
     'SELECT organization_id FROM users WHERE id=$1',
-    [userId]
+    [userId],
   );
   let orgId = orgRes.rows[0]?.organization_id;
   if (!orgId) {
     const createOrg = await pool.query(
       'INSERT INTO organizations (name, created_at) VALUES ($1, NOW()) RETURNING id',
-      [name || 'Unnamed']
+      [name || 'Unnamed'],
     );
     orgId = createOrg.rows[0].id;
     await pool.query('UPDATE users SET organization_id=$1 WHERE id=$2', [orgId, userId]);
@@ -151,7 +165,7 @@ app.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const userRes = await pool.query(
       'INSERT INTO users (email, password_hash, organization_id, created_at) VALUES ($1, $2, NULL, NOW()) RETURNING id',
-      [email, passwordHash]
+      [email, passwordHash],
     );
     const userId = userRes.rows[0].id;
     const orgId = await ensureOrganization(userId, companyName || email.split('@')[0]);
@@ -165,33 +179,38 @@ app.post('/register', async (req, res) => {
 
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+  try {
+    const userRes = await pool.query('SELECT * FROM users WHERE email=$1', [email]);
+    if (userRes.rows.length === 0) return res.status(400).json({ error: 'Invalid credentials' });
+    const user = userRes.rows[0];
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) return res.status(400).json({ error: 'Invalid credentials' });
+    const token = jwt.sign({ userId: user.id, organizationId: user.organization_id }, JWT_SECRET);
+    return res.json({ token });
+  } catch (err) {
+    logger.error('Login error:', err);
+    return res.status(400).json({ error: 'Invalid credentials' });
   }
-  const userRes = await pool.query('SELECT * FROM users WHERE email=$1', [email]);
-  if (userRes.rows.length === 0) return res.status(400).json({ error: 'Invalid credentials' });
-  const user = userRes.rows[0];
-  const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) return res.status(400).json({ error: 'Invalid credentials' });
-  const token = jwt.sign({ userId: user.id, organizationId: user.organization_id }, JWT_SECRET);
-  return res.json({ token });
 });
 
 // --- PROFILE ROUTES ---
+// These legacy routes store profiles keyed by internal user ID. They are
+// retained for backwards compatibility but not used by the new frontend.
 app.post('/profile', authenticate, async (req, res) => {
   const { company_description, content_preferences, team_info, target_audience } = req.body;
   try {
     const result = await pool.query(
       `INSERT INTO profiles (user_id, company_description, content_preferences, team_info, target_audience)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (user_id) DO UPDATE
-       SET company_description = $2,
-           content_preferences = $3,
-           team_info = $4,
-           target_audience = $5,
-           updated_at = NOW()
-       RETURNING *`,
-      [req.userId, company_description, content_preferences, team_info, target_audience]
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id) DO UPDATE
+            SET company_description = $2,
+                content_preferences = $3,
+                team_info = $4,
+                target_audience = $5,
+                updated_at = NOW()
+            RETURNING *`,
+      [req.userId, company_description, content_preferences, team_info, target_audience],
     );
     return res.json(result.rows[0]);
   } catch (err) {
@@ -208,7 +227,7 @@ app.post('/profile/images', authenticate, upload.array('images', 10), async (req
   }
   try {
     const insertPromises = req.files.map((file) =>
-      pool.query('INSERT INTO profile_images (profile_id, image_url) VALUES ($1, $2)', [profileId, file.filename])
+      pool.query('INSERT INTO profile_images (profile_id, image_url) VALUES ($1, $2)', [profileId, file.filename]),
     );
     await Promise.all(insertPromises);
     return res.json({ message: 'Images uploaded successfully' });
@@ -223,10 +242,7 @@ app.get('/profile', authenticate, async (req, res) => {
     const profileRes = await pool.query('SELECT * FROM profiles WHERE user_id = $1', [req.userId]);
     const profile = profileRes.rows[0];
     if (!profile) return res.json(null);
-    const imagesRes = await pool.query(
-      'SELECT image_url FROM profile_images WHERE profile_id = $1',
-      [profile.id]
-    );
+    const imagesRes = await pool.query('SELECT image_url FROM profile_images WHERE profile_id = $1', [profile.id]);
     const images = imagesRes.rows.map((row) => row.image_url);
     return res.json({ ...profile, images });
   } catch (err) {
@@ -244,16 +260,16 @@ app.post('/api/brand-profile', authenticate, async (req, res) => {
     if (!orgId) return res.status(400).json({ error: 'Organization not found' });
     const result = await pool.query(
       `INSERT INTO brand_profiles (organization_id, company_name, industry, target_audience, tone, brand_colors, logo_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (organization_id) DO UPDATE
-       SET company_name=$2,
-           industry=$3,
-           target_audience=$4,
-           tone=$5,
-           brand_colors=$6,
-           logo_url=$7
-       RETURNING *`,
-      [orgId, company_name, industry, target_audience, tone, brand_colors, logo_url]
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            ON CONFLICT (organization_id) DO UPDATE
+            SET company_name=$2,
+                industry=$3,
+                target_audience=$4,
+                tone=$5,
+                brand_colors=$6,
+                logo_url=$7
+            RETURNING *`,
+      [orgId, company_name, industry, target_audience, tone, brand_colors, logo_url],
     );
     return res.json(result.rows[0]);
   } catch (err) {
@@ -300,7 +316,7 @@ app.post('/api/generate', authenticate, async (req, res) => {
     // Fetch the brand profile associated with this organization to inform content generation.
     const brandRes = await pool.query(
       'SELECT company_name, industry, target_audience, tone, brand_colors FROM brand_profiles WHERE organization_id=$1',
-      [orgId]
+      [orgId],
     );
     const brand = brandRes.rows[0] || {};
 
@@ -328,8 +344,8 @@ app.post('/api/generate', authenticate, async (req, res) => {
     for (const post of posts) {
       await pool.query(
         `INSERT INTO posts (organization_id, text, hashtags, scheduled_at, flagged, status)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [post.organization_id, post.text, post.hashtags, post.scheduled_at, post.flagged, post.status]
+              VALUES ($1,$2,$3,$4,$5,$6)`,
+        [post.organization_id, post.text, post.hashtags, post.scheduled_at, post.flagged, post.status],
       );
     }
     return res.status(201).json(posts);
@@ -359,7 +375,7 @@ app.get('/api/usage', authenticate, async (req, res) => {
     if (!orgId) return res.status(400).json({ error: 'Organization not found' });
     const usageRes = await pool.query(
       'SELECT month, tokens_used, images_generated FROM organization_usage WHERE organization_id=$1 ORDER BY month DESC LIMIT 1',
-      [orgId]
+      [orgId],
     );
     return res.json(usageRes.rows[0] || { tokens_used: 0, images_generated: 0 });
   } catch (err) {
@@ -369,8 +385,9 @@ app.get('/api/usage', authenticate, async (req, res) => {
 });
 
 // --- ANALYTICS ROUTES ---
-// Returns weekly post counts for the authenticated organization. Each record contains
-// the week start date (ISO string) and the number of posts scheduled or published in that week.
+// Returns weekly post counts for the authenticated organization. Each record
+// contains the week start date (ISO string) and the number of posts scheduled
+// or published in that week.
 app.get('/api/stats/posts', authenticate, async (req, res) => {
   try {
     // Determine the organization for the current user
@@ -380,13 +397,13 @@ app.get('/api/stats/posts', authenticate, async (req, res) => {
     // Aggregate posts by ISO week (starting Monday)
     const statsRes = await pool.query(
       `SELECT to_char(date_trunc('week', scheduled_at), 'YYYY-MM-DD') AS week_start,
-              COUNT(*) AS post_count
-       FROM posts
-       WHERE organization_id=$1
-       GROUP BY week_start
-       ORDER BY week_start DESC
-       LIMIT 6`,
-      [orgId]
+                   COUNT(*) AS post_count
+            FROM posts
+            WHERE organization_id=$1
+            GROUP BY week_start
+            ORDER BY week_start DESC
+            LIMIT 6`,
+      [orgId],
     );
     return res.json(statsRes.rows);
   } catch (err) {
@@ -395,7 +412,8 @@ app.get('/api/stats/posts', authenticate, async (req, res) => {
   }
 });
 
-// Returns counts of posts by status (draft, scheduled, published) for the authenticated organization.
+// Returns counts of posts by status (draft, scheduled, published) for the
+// authenticated organization.
 app.get('/api/stats/status', authenticate, async (req, res) => {
   try {
     const userRes = await pool.query('SELECT organization_id FROM users WHERE id=$1', [req.userId]);
@@ -403,10 +421,10 @@ app.get('/api/stats/status', authenticate, async (req, res) => {
     if (!orgId) return res.status(400).json({ error: 'Organization not found' });
     const resCounts = await pool.query(
       `SELECT status, COUNT(*) AS count
-       FROM posts
-       WHERE organization_id=$1
-       GROUP BY status`,
-      [orgId]
+            FROM posts
+            WHERE organization_id=$1
+            GROUP BY status`,
+      [orgId],
     );
     // Convert array of rows to an object keyed by status
     const counts = resCounts.rows.reduce((acc, row) => {
@@ -428,7 +446,7 @@ app.post('/api/schedule', authenticate, async (req, res) => {
   try {
     await pool.query(
       'UPDATE posts SET scheduled_at=$1, status=$2 WHERE id=$3 AND organization_id=(SELECT organization_id FROM users WHERE id=$4)',
-      [new Date(publishAt), 'scheduled', postId, req.userId]
+      [new Date(publishAt), 'scheduled', postId, req.userId],
     );
     return res.json({ message: 'Post scheduled' });
   } catch (err) {
@@ -441,10 +459,10 @@ app.post('/api/publish-scheduled', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE posts
-       SET status='published'
-       WHERE status='scheduled' AND scheduled_at <= NOW() AND organization_id=(SELECT organization_id FROM users WHERE id=$1)
-       RETURNING *`,
-      [req.userId]
+            SET status='published'
+            WHERE status='scheduled' AND scheduled_at <= NOW() AND organization_id=(SELECT organization_id FROM users WHERE id=$1)
+            RETURNING *`,
+      [req.userId],
     );
     return res.json({ published: result.rows.length });
   } catch (err) {
@@ -468,7 +486,7 @@ applySchema().then(() => {
     try {
       const result = await pool.query(
         `UPDATE posts SET status='published'
-         WHERE status='scheduled' AND scheduled_at <= NOW() RETURNING id`
+              WHERE status='scheduled' AND scheduled_at <= NOW() RETURNING id`,
       );
       if (result.rowCount > 0) {
         logger.info(`Scheduler published ${result.rowCount} posts`);
