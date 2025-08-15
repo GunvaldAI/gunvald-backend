@@ -306,26 +306,44 @@ app.post('/api/generate', authenticate, async (req, res) => {
   // Default to 5 posts; clamp the count between 1 and 10 to avoid excessive generation.
   const postCount = count && Number(count) > 0 ? Math.min(Number(count), 10) : 5;
   try {
-    // Fetch the user's profile by Clerk ID (req.userId) to inform content generation.
-    // The query maps company_description to description to align with the AI helper input.
+    // Fetch the user's profile by Clerk ID (req.userId).  Only select
+    // columns that are guaranteed to exist in the current schema.  The
+    // content_preferences column is aliased to content_themes for
+    // backwards‑compatibility.  Additional fields such as
+    // marketing_goals may not be present on all deployments, so they
+    // are populated with empty strings below.
     const profRes = await pool.query(
       `SELECT company_name,
               company_description AS description,
               target_audience,
               tone_of_voice,
-              marketing_goals,
-              content_themes,
-              social_channels
+              social_channels,
+              content_preferences AS content_themes
          FROM profiles
         WHERE clerk_id = $1`,
       [req.userId],
     );
-    const profile = profRes.rows[0];
-    if (!profile) {
+    const row = profRes.rows[0];
+    if (!row) {
       return res.status(400).json({ error: 'Profile not found' });
     }
 
-    // Generate raw post suggestions (text, hashtags and optional image prompts) using the AI helper.
+    // Construct a profile object expected by the AI helper.  Since the
+    // profiles table may not include marketing_goals, default to an
+    // empty string.  This ensures generatePlan can safely access
+    // undefined properties without triggering database errors.
+    const profile = {
+      company_name: row.company_name,
+      description: row.description,
+      target_audience: row.target_audience,
+      tone_of_voice: row.tone_of_voice || '',
+      marketing_goals: '',
+      content_themes: row.content_themes || '',
+      social_channels: row.social_channels || [],
+    };
+
+    // Generate raw post suggestions (text, hashtags and optional image
+    // prompts) using the AI helper.
     const generated = await generatePlan(profile, postCount);
 
     // Construct final post objects with scheduling and moderation flags but do not persist them.
