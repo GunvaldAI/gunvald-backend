@@ -306,16 +306,8 @@ app.post('/api/generate', authenticate, async (req, res) => {
   // Default to 5 posts; clamp the count between 1 and 10 to avoid excessive generation.
   const postCount = count && Number(count) > 0 ? Math.min(Number(count), 10) : 5;
   try {
-    // Determine the organization for the current user.
-    const userRes = await pool.query('SELECT organization_id FROM users WHERE id=$1', [req.userId]);
-    const orgId = userRes.rows[0]?.organization_id;
-    if (!orgId) {
-      return res.status(400).json({ error: 'Organization not found' });
-    }
-
-    // Fetch the user's profile to inform content generation.  If no profile
-    // exists, return an error.  The query maps company_description to
-    // description to align with the AI helper input.
+    // Fetch the user's profile by Clerk ID (req.userId) to inform content generation.
+    // The query maps company_description to description to align with the AI helper input.
     const profRes = await pool.query(
       `SELECT company_name,
               company_description AS description,
@@ -325,7 +317,7 @@ app.post('/api/generate', authenticate, async (req, res) => {
               content_themes,
               social_channels
          FROM profiles
-        WHERE user_id = $1`,
+        WHERE clerk_id = $1`,
       [req.userId],
     );
     const profile = profRes.rows[0];
@@ -333,35 +325,27 @@ app.post('/api/generate', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Profile not found' });
     }
 
-    // Use the AI helper to asynchronously generate raw post suggestions (text + hashtags).
+    // Generate raw post suggestions (text, hashtags and optional image prompts) using the AI helper.
     const generated = await generatePlan(profile, postCount);
-    const posts = [];
 
-    // Construct final post objects with scheduling and moderation flags.
+    // Construct final post objects with scheduling and moderation flags but do not persist them.
+    const posts = [];
     for (let i = 0; i < generated.length; i++) {
-      const { text, hashtags } = generated[i];
+      const { text, hashtags, imagePrompt } = generated[i];
       const flagged = bannedWords.some((w) => text.toLowerCase().includes(w));
       const date = new Date();
       date.setDate(date.getDate() + i);
       posts.push({
-        organization_id: orgId,
         text,
         hashtags,
+        image_prompt: imagePrompt,
         scheduled_at: date,
         flagged,
         status: 'draft',
       });
     }
-
-    // Persist posts to the database.
-    for (const post of posts) {
-      await pool.query(
-        `INSERT INTO posts (organization_id, text, hashtags, scheduled_at, flagged, status)
-              VALUES ($1,$2,$3,$4,$5,$6)`,
-        [post.organization_id, post.text, post.hashtags, post.scheduled_at, post.flagged, post.status],
-      );
-    }
-    return res.status(201).json(posts);
+    // Return the generated posts directly to the caller.
+    return res.status(200).json(posts);
   } catch (err) {
     logger.error('Error generating posts:', err);
     return res.status(500).json({ error: 'Failed to generate posts' });
