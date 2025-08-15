@@ -1,15 +1,20 @@
-const { Configuration, OpenAIApi } = require('openai');
+// Dynamically import a fetch implementation. Node.js 18+ has a global
+// fetch function; if not available, fall back to the `node-fetch` package.
+let fetchFn;
+try {
+  fetchFn = global.fetch || require('node-fetch');
+} catch (_) {
+  fetchFn = global.fetch;
+}
 
 /**
  * Helper to initialize OpenAI client.  The API key must be provided via
  * the OPENAI_API_KEY environment variable.  You can optionally set
  * OPENAI_MODEL (e.g. 'gpt-4o') to override the default model.
  */
-const configuration = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-const openai = new OpenAIApi(configuration);
+// We intentionally avoid depending on the OpenAI SDK to reduce external
+// dependencies. Instead, we will call the OpenAI REST API directly using
+// fetchFn. Ensure OPENAI_API_KEY is set in your environment.
 
 /**
  * Generates a list of social media post suggestions based on the given
@@ -76,14 +81,30 @@ async function generatePlan(profile, count = 5) {
     { role: 'user', content: prompt },
   ];
 
-  const response = await openai.createChatCompletion({
+  // Prepare request payload for OpenAI's chat completion API.  Use
+  // temperature and max_tokens settings similar to the SDK call above.
+  const body = {
     model,
     messages,
     temperature: 0.7,
     max_tokens: 1500,
+  };
+  // Call the OpenAI API directly using fetchFn. Handle error responses
+  // explicitly by throwing an error with status and message.
+  const res = await fetchFn('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(body),
   });
-
-  const raw = response.data.choices?.[0]?.message?.content?.trim() || '';
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`OpenAI API error: ${res.status} ${errText}`);
+  }
+  const data = await res.json();
+  const raw = data.choices?.[0]?.message?.content?.trim() || '';
   let posts;
   try {
     posts = JSON.parse(raw);
