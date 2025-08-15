@@ -26,6 +26,8 @@ const path = require('path');
 
 // Import AI helper for content generation
 const { generatePlan } = require('./ai');
+// Import AI helper for image generation
+const { generateImages } = require('./ai_images');
 
 // Import Profiles router for Clerk-based profile CRUD operations.  This
 // router handles profiles keyed by Clerk ID and exposes GET, POST and
@@ -367,6 +369,27 @@ app.post('/api/generate', authenticate, async (req, res) => {
   } catch (err) {
     logger.error('Error generating posts:', err);
     return res.status(500).json({ error: 'Failed to generate posts' });
+  }
+});
+
+// Generate images for a list of prompts.  The caller must supply
+// `prompts` as an array of strings in the request body.  Each prompt
+// will be passed to the OpenAI Images API.  The response is an
+// array of image URLs (or null if generation failed for a given
+// prompt).
+app.post('/api/generate-images', authenticate, async (req, res) => {
+  const { prompts } = req.body;
+  if (!Array.isArray(prompts) || prompts.length === 0) {
+    return res
+      .status(400)
+      .json({ error: 'prompts must be a non-empty array' });
+  }
+  try {
+    const images = await generateImages(prompts);
+    return res.status(200).json(images);
+  } catch (err) {
+    logger.error('Error generating images:', err);
+    return res.status(500).json({ error: 'Failed to generate images' });
   }
 });
 
