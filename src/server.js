@@ -303,8 +303,8 @@ const bannedWords = ['kielletty', 'väkivalta', 'rasismi'];
  */
 app.post('/api/generate', authenticate, async (req, res) => {
   const { count } = req.body;
-  // Default to 5 posts; clamp the count between 1 and 7 to avoid excessive generation.
-  const postCount = count && Number(count) > 0 ? Math.min(Number(count), 7) : 5;
+  // Default to 5 posts; clamp the count between 1 and 10 to avoid excessive generation.
+  const postCount = count && Number(count) > 0 ? Math.min(Number(count), 10) : 5;
   try {
     // Determine the organization for the current user.
     const userRes = await pool.query('SELECT organization_id FROM users WHERE id=$1', [req.userId]);
@@ -313,15 +313,28 @@ app.post('/api/generate', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Organization not found' });
     }
 
-    // Fetch the brand profile associated with this organization to inform content generation.
-    const brandRes = await pool.query(
-      'SELECT company_name, industry, target_audience, tone, brand_colors FROM brand_profiles WHERE organization_id=$1',
-      [orgId],
+    // Fetch the user's profile to inform content generation.  If no profile
+    // exists, return an error.  The query maps company_description to
+    // description to align with the AI helper input.
+    const profRes = await pool.query(
+      `SELECT company_name,
+              company_description AS description,
+              target_audience,
+              tone_of_voice,
+              marketing_goals,
+              content_themes,
+              social_channels
+         FROM profiles
+        WHERE user_id = $1`,
+      [req.userId],
     );
-    const brand = brandRes.rows[0] || {};
+    const profile = profRes.rows[0];
+    if (!profile) {
+      return res.status(400).json({ error: 'Profile not found' });
+    }
 
-    // Use the AI helper to generate raw post suggestions (text + hashtags).
-    const generated = generatePlan(brand, postCount);
+    // Use the AI helper to asynchronously generate raw post suggestions (text + hashtags).
+    const generated = await generatePlan(profile, postCount);
     const posts = [];
 
     // Construct final post objects with scheduling and moderation flags.
