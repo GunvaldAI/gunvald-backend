@@ -1,3 +1,9 @@
+// Modified AI helper with code fence stripping
+// This file is based on the original src/ai.js but includes logic to strip
+// triple backtick code fences (e.g. ```json ... ```) before attempting to
+// parse the AI-generated JSON. Without this, the backend would return a
+// stringified JSON array wrapped in markdown, which breaks the frontend.
+
 // Dynamically import a fetch implementation. Node.js 18+ has a global
 // fetch function; if not available, fall back to the `node-fetch` package.
 let fetchFn;
@@ -29,7 +35,8 @@ try {
  *   description, target_audience, tone_of_voice, marketing_goals,
  *   content_themes and social_channels.
  * @param {number} count - Number of posts to generate (1–10 recommended).
- * @returns {Promise<Array<{text: string, hashtags: string[], imagePrompt?: string}>>}
+ * @returns {Promise<Array<{text: string, hashtags: string[], imagePrompt?:
+ * string}>>}
  */
 async function generatePlan(profile, count = 5) {
   if (!process.env.OPENAI_API_KEY) {
@@ -104,7 +111,15 @@ async function generatePlan(profile, count = 5) {
     throw new Error(`OpenAI API error: ${res.status} ${errText}`);
   }
   const data = await res.json();
-  const raw = data.choices?.[0]?.message?.content?.trim() || '';
+  let raw = data.choices?.[0]?.message?.content?.trim() || '';
+  // Strip Markdown code fences if the AI includes them (e.g. ```json ... ```)
+  if (raw.startsWith('```')) {
+    // Remove opening fence with optional "json" label and trailing fence
+    raw = raw
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/```$/i, '')
+      .trim();
+  }
   let posts;
   try {
     posts = JSON.parse(raw);
