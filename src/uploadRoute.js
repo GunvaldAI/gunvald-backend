@@ -28,3 +28,23 @@ router.post('/upload-image', async (req, res) => {
 });
 
 module.exports = router;
+
+// DELETE or POST /delete-image
+// This endpoint removes an image from Cloudinary given its publicId.
+// Body: { publicId: "folder/filenameWithoutExt" }
+// Response: { success: true }
+// Note: We accept POST here because browsers may not easily send a JSON body with DELETE.
+router.post('/delete-image', async (req, res) => {
+  const { publicId } = req.body;
+  if (!publicId) {
+    return res.status(400).json({ error: 'No publicId provided' });
+  }
+  try {
+    // Destroy the resource. Setting invalidate: true clears cached versions as well.
+    await cloudinary.uploader.destroy(publicId, { invalidate: true });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Cloudinary deletion failed:', error);
+    return res.status(500).json({ error: 'Image deletion failed' });
+  }
+});
