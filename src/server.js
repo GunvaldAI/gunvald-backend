@@ -34,7 +34,7 @@ const { generateImages } = require('./ai_images');
 // PUT endpoints under /api/profiles.  See src/profiles.js for the
 // implementation details.
 const createProfilesRouter = require('./profiles');
-
+const uploadRoute = require('./uploadRoute');
 // Read environment variables for database connection and JWT secret.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -80,7 +80,7 @@ const app = express();
 // Run Clerk allowed origins synchronization on startup
 syncClerkAllowedOrigins();
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '10mb' }));
 
 // Register Sentry request and tracing handlers before other middlewares.
 // These handlers create a Sentry transaction for each incoming request
@@ -138,7 +138,7 @@ function authenticate(req, res, next) {
 // (e.g. GET /profiles/:clerkId) will be served at /api/profiles/:clerkId.
 const profilesRouter = createProfilesRouter(pool);
 app.use('/api', authenticate, profilesRouter);
-
+app.use('/api', authenticate, uploadRoute);
 // Ensure user belongs to an organization; create if missing
 async function ensureOrganization(userId, name) {
   const orgRes = await pool.query(
